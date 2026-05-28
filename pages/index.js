@@ -74,11 +74,34 @@ export default function App() {
   };
 
   const login = async () => {
-    const { data } = await supabase.from("users").select("*").eq("username", loginForm.username).eq("password", loginForm.password).single();
-    if (!data) return setLoginErr("用户名或密码错误");
-    if (data.status === "pending") return setLoginErr("账号待审核，请等待管理员批准");
-    setUser(data); localStorage.setItem("raner_user", JSON.stringify(data)); setLoginErr(""); setPage("feed");
-  };
+
+  const { data, error } = await supabase
+    .from("users")
+    .select("*")
+    .eq("username", loginForm.username.trim())
+    .eq("password", loginForm.password.trim())
+    .single();
+
+  console.log("DATA:", data);
+  console.log("ERROR:", error);
+
+  if (error) {
+    return setLoginErr(error.message);
+  }
+
+  if (!data) {
+    return setLoginErr("没有找到用户");
+  }
+
+  if (data.status === "pending") {
+    return setLoginErr("账号待审核，请等待管理员批准");
+  }
+
+  setUser(data);
+  localStorage.setItem("raner_user", JSON.stringify(data));
+  setLoginErr("");
+  setPage("feed");
+};
 
   const register = async () => {
     if (!regForm.name || !regForm.username || !regForm.password) return setRegMsg("请填写所有必填项");
