@@ -6,11 +6,12 @@ const supabase = createClient(
   "sb_publishable_ZNiCaBJE9siL-HMJd8ZtHQ_-2M5te7H"
 );
 
-// ====== 新增：上传文件函数 ======
+// ================= 上传函数 =================
 const uploadFile = async (file, folder = "media") => {
-  const fileExt = file.name.split(".").pop();
-  const fileName = `${Math.random().toString(36).slice(2)}.${fileExt}`;
-  const filePath = `${folder}/${fileName}`;
+  const ext = file.name.split(".").pop();
+  const filePath = `${folder}/${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}.${ext}`;
 
   const { error } = await supabase.storage
     .from("uploads")
@@ -28,33 +29,37 @@ const uploadFile = async (file, folder = "media") => {
   return data.publicUrl;
 };
 
-// ====== 原组件 ======
 export default function App() {
   const [user, setUser] = useState(null);
   const [page, setPage] = useState("login");
-  const [users, setUsers] = useState([]);
+
   const [posts, setPosts] = useState([]);
 
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
-  const [loginErr, setLoginErr] = useState("");
+  const [regForm, setRegForm] = useState({
+    name: "",
+    username: "",
+    password: "",
+  });
 
   const [newPost, setNewPost] = useState("");
+  const [file, setFile] = useState(null);
+  const [avatarFile, setAvatarFile] = useState(null);
 
-  // ====== 新增：媒体 ======
-  const [mediaFile, setMediaFile] = useState(null);
+  const [commentText, setCommentText] = useState({});
+  const [liked, setLiked] = useState({});
 
+  // ================= 初始化用户 =================
   useEffect(() => {
-    const saved = localStorage.getItem("raner_user");
-    if (saved) {
-      setUser(JSON.parse(saved));
-      setPage("feed");
-    }
+    const saved = localStorage.getItem("user");
+    if (saved) setUser(JSON.parse(saved));
   }, []);
 
   useEffect(() => {
     if (user) loadPosts();
   }, [user]);
 
+  // ================= 拉取动态 =================
   const loadPosts = async () => {
     const { data } = await supabase
       .from("posts")
@@ -64,127 +69,195 @@ export default function App() {
     if (data) setPosts(data);
   };
 
-  // ====== 登录（修复版） ======
+  // ================= 登录 =================
   const login = async () => {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("users")
       .select("*")
-      .eq("username", loginForm.username.trim())
-      .eq("password", loginForm.password.trim())
+      .eq("username", loginForm.username)
+      .eq("password", loginForm.password)
       .single();
 
-    if (error || !data) {
-      setLoginErr("用户名或密码错误");
-      return;
-    }
+    if (!data) return alert("账号或密码错误");
 
     setUser(data);
-    localStorage.setItem("raner_user", JSON.stringify(data));
+    localStorage.setItem("user", JSON.stringify(data));
     setPage("feed");
   };
 
-  // ====== 发布（核心升级） ======
-  const publishPost = async () => {
-    if (!newPost && !mediaFile) return;
+  // ================= 注册 =================
+  const register = async () => {
+    let avatarUrl = null;
+
+    if (avatarFile) {
+      avatarUrl = await uploadFile(avatarFile, "avatar");
+    }
+
+    await supabase.from("users").insert({
+      ...regForm,
+      role: "viewer",
+      status: "active",
+      avatar_url: avatarUrl,
+    });
+
+    alert("注册成功");
+    setPage("login");
+  };
+
+  // ================= 发帖 =================
+  const publish = async () => {
+    if (!newPost && !file) return;
 
     let mediaUrl = null;
     let mediaType = null;
 
-    if (mediaFile) {
-      mediaUrl = await uploadFile(mediaFile);
-
-      if (mediaFile.type.startsWith("image")) mediaType = "image";
-      if (mediaFile.type.startsWith("video")) mediaType = "video";
+    if (file) {
+      mediaUrl = await uploadFile(file);
+      mediaType = file.type.startsWith("image")
+        ? "image"
+        : "video";
     }
 
     await supabase.from("posts").insert({
       content: newPost,
-      author_id: user.id,
       media_url: mediaUrl,
       media_type: mediaType,
+      author_id: user.id,
+      likes: 0,
     });
 
     setNewPost("");
-    setMediaFile(null);
+    setFile(null);
     loadPosts();
   };
 
-  // ====== UI ======
+  // ================= 点赞 =================
+  const likePost = async (post) => {
+    const newLike = post.likes + 1;
+
+    await supabase
+      .from("posts")
+      .update({ likes: newLike })
+      .eq("id", post.id);
+
+    loadPosts();
+  };
+
+  // ================= 评论 =================
+  const addComment = async (postId) => {
+    const text = commentText[postId];
+    if (!text) return;
+
+    await supabase.from("comments").insert({
+      post_id: postId,
+      user_id: user.id,
+      content: text,
+    });
+
+    setCommentText({ ...commentText, [postId]: "" });
+  };
+
+  // ================= UI =================
+  if (!user) {
+    return (
+      <div style={{ padding: 20 }}>
+        {page === "login" ? (
+          <>
+            <h2>登录</h2>
+            <input
+              placeholder="用户名"
+              onChange={(e) =>
+                setLoginForm({ ...loginForm, username: e.target.value })
+              }
+            />
+            <input
+              placeholder="密码"
+              type="password"
+              onChange={(e) =>
+                setLoginForm({ ...loginForm, password: e.target.value })
+              }
+            />
+            <button onClick={login}>登录</button>
+            <button onClick={() => setPage("register")}>注册</button>
+          </>
+        ) : (
+          <>
+            <h2>注册</h2>
+            <input
+              placeholder="昵称"
+              onChange={(e) =>
+                setRegForm({ ...regForm, name: e.target.value })
+              }
+            />
+            <input
+              placeholder="用户名"
+              onChange={(e) =>
+                setRegForm({ ...regForm, username: e.target.value })
+              }
+            />
+            <input
+              placeholder="密码"
+              type="password"
+              onChange={(e) =>
+                setRegForm({ ...regForm, password: e.target.value })
+              }
+            />
+
+            <input type="file" onChange={(e) => setAvatarFile(e.target.files[0])} />
+
+            <button onClick={register}>注册</button>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: 20 }}>
-      {page === "login" && (
-        <div>
-          <h2>登录</h2>
+      <h2>微博动态</h2>
 
-          <input
-            placeholder="用户名"
-            value={loginForm.username}
-            onChange={(e) =>
-              setLoginForm({ ...loginForm, username: e.target.value })
-            }
-          />
+      {/* 发帖 */}
+      <textarea
+        placeholder="发点什么..."
+        value={newPost}
+        onChange={(e) => setNewPost(e.target.value)}
+      />
 
-          <input
-            placeholder="密码"
-            type="password"
-            value={loginForm.password}
-            onChange={(e) =>
-              setLoginForm({ ...loginForm, password: e.target.value })
-            }
-          />
+      <input
+        type="file"
+        accept="image/*,video/*"
+        onChange={(e) => setFile(e.target.files[0])}
+      />
 
-          <button onClick={login}>登录</button>
+      <button onClick={publish}>发布</button>
 
-          <div style={{ color: "red" }}>{loginErr}</div>
-        </div>
-      )}
+      {/* 动态流 */}
+      {posts.map((p) => (
+        <div key={p.id} style={{ border: "1px solid #ddd", margin: 10 }}>
+          <p>{p.content}</p>
 
-      {page === "feed" && (
-        <div>
-          <h2>动态</h2>
+          {p.media_type === "image" && (
+            <img src={p.media_url} style={{ width: 300 }} />
+          )}
 
-          {/* ===== 发帖区（新增上传） ===== */}
-          <div style={{ marginBottom: 20 }}>
-            <textarea
-              placeholder="说点什么..."
-              value={newPost}
-              onChange={(e) => setNewPost(e.target.value)}
-            />
+          {p.media_type === "video" && (
+            <video src={p.media_url} controls style={{ width: 300 }} />
+          )}
 
-            <input
-              type="file"
-              accept="image/*,video/*"
-              onChange={(e) => setMediaFile(e.target.files[0])}
-            />
-
-            <button onClick={publishPost}>发布</button>
+          <div>
+            <button onClick={() => likePost(p)}>❤️ {p.likes}</button>
           </div>
 
-          {/* ===== 帖子渲染（新增媒体展示） ===== */}
-          {posts.map((p) => (
-            <div key={p.id} style={{ border: "1px solid #ddd", margin: 10 }}>
-              <p>{p.content}</p>
-
-              {/* 图片 */}
-              {p.media_type === "image" && (
-                <img
-                  src={p.media_url}
-                  style={{ width: "100%", maxWidth: 400 }}
-                />
-              )}
-
-              {/* 视频 */}
-              {p.media_type === "video" && (
-                <video
-                  src={p.media_url}
-                  controls
-                  style={{ width: "100%", maxWidth: 400 }}
-                />
-              )}
-            </div>
-          ))}
+          <input
+            placeholder="评论"
+            value={commentText[p.id] || ""}
+            onChange={(e) =>
+              setCommentText({ ...commentText, [p.id]: e.target.value })
+            }
+          />
+          <button onClick={() => addComment(p.id)}>发送</button>
         </div>
-      )}
+      ))}
     </div>
   );
 }
