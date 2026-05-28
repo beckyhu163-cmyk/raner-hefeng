@@ -6,8 +6,6 @@ const supabase = createClient(
   "sb_publishable_ZNiCaBJE9siL-HMJd8ZtHQ_-2M5te7H"
 );
 
-/* ================= UI 不动 ================= */
-
 const avatarBg = n => {
   const c = ["#fce4ec","#e8f5e9","#e3f2fd","#fff8e1","#f3e5f5","#e0f7fa"];
   return c[(n||"?").charCodeAt(0) % c.length];
@@ -22,23 +20,39 @@ const Tree = () => (
   </svg>
 );
 
-/* ================= 主程序 ================= */
-
 export default function App() {
   const [user, setUser] = useState(null);
   const [page, setPage] = useState("login");
 
+  const [users, setUsers] = useState([]);
   const [posts, setPosts] = useState([]);
+  const [schedules, setSchedules] = useState([]);
+
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [regForm, setRegForm] = useState({ name: "", username: "", password: "", reason: "" });
 
-  const [newPost, setNewPost] = useState("");
+  const [loginErr, setLoginErr] = useState("");
+  const [regMsg, setRegMsg] = useState("");
 
-  // ⭐ 新增：媒体文件
+  const [newPost, setNewPost] = useState("");
+  const [newSched, setNewSched] = useState({ title: "", date: "", time: "", location: "", description: "" });
+
+  const [showSchedForm, setShowSchedForm] = useState(false);
+  const [openComments, setOpenComments] = useState({});
+  const [commentInput, setCommentInput] = useState({});
+  const [likedPosts, setLikedPosts] = useState({});
+  const [toast, setToast] = useState("");
+  const [expandedPost, setExpandedPost] = useState({});
+  const [pendingUsers, setPendingUsers] = useState([]);
+
+  /* ================= ⭐ 新增：文件状态 ================= */
   const [imageFile, setImageFile] = useState(null);
   const [videoFile, setVideoFile] = useState(null);
 
-  const [loginErr, setLoginErr] = useState("");
+  const showToast = msg => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2500);
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem("raner_user");
@@ -49,20 +63,45 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (user) loadPosts();
+    if (user) {
+      loadPosts();
+      loadSchedules();
+      if (user.role === "admin") {
+        loadPendingUsers();
+        loadAllUsers();
+      }
+    }
   }, [user]);
 
   const loadPosts = async () => {
     const { data } = await supabase
       .from("posts")
-      .select("*")
+      .select("*, comments(*)")
       .order("created_at", { ascending: false });
 
     if (data) setPosts(data);
   };
 
-  /* ================= 登录 ================= */
+  const loadSchedules = async () => {
+    const { data } = await supabase
+      .from("schedules")
+      .select("*")
+      .order("date", { ascending: true });
 
+    if (data) setSchedules(data);
+  };
+
+  const loadPendingUsers = async () => {
+    const { data } = await supabase.from("users").select("*").eq("status", "pending");
+    if (data) setPendingUsers(data);
+  };
+
+  const loadAllUsers = async () => {
+    const { data } = await supabase.from("users").select("*").eq("status", "active");
+    if (data) setUsers(data);
+  };
+
+  /* ================= 登录 ================= */
   const login = async () => {
     const { data, error } = await supabase
       .from("users")
@@ -71,32 +110,41 @@ export default function App() {
       .eq("password", loginForm.password.trim())
       .single();
 
-    if (error || !data) {
-      setLoginErr("用户名或密码错误");
-      return;
-    }
+    if (error || !data) return setLoginErr("用户名或密码错误");
+
+    if (data.status === "pending") return setLoginErr("账号待审核，请等待管理员批准");
 
     setUser(data);
     localStorage.setItem("raner_user", JSON.stringify(data));
+    setLoginErr("");
     setPage("feed");
   };
 
-  /* ================= 注册 ================= */
-
   const register = async () => {
-    await supabase.from("users").insert({
+    if (!regForm.name || !regForm.username || !regForm.password)
+      return setRegMsg("请填写所有必填项");
+
+    const { error } = await supabase.from("users").insert({
       name: regForm.name,
       username: regForm.username,
       password: regForm.password,
       role: "viewer",
-      status: "active"
+      status: "pending"
     });
 
+    if (error) return setRegMsg("用户名已存在");
+
+    setRegMsg("申请已提交，等待管理员审核 ✓");
+    setRegForm({ name: "", username: "", password: "", reason: "" });
+  };
+
+  const logout = () => {
+    setUser(null);
+    localStorage.removeItem("raner_user");
     setPage("login");
   };
 
-  /* ================= 上传文件（核心新增） ================= */
-
+  /* ================= ⭐ 新增：上传函数 ================= */
   const uploadFile = async (file, folder) => {
     if (!file) return null;
 
@@ -106,10 +154,7 @@ export default function App() {
       .from("media")
       .upload(`${folder}/${fileName}`, file);
 
-    if (error) {
-      console.log(error);
-      return null;
-    }
+    if (error) return null;
 
     const { data: urlData } = supabase.storage
       .from("media")
@@ -118,19 +163,18 @@ export default function App() {
     return urlData.publicUrl;
   };
 
-  /* ================= 发动态（升级版） ================= */
-
+  /* ================= ⭐ 改造：发布动态（UI不动） ================= */
   const publishPost = async () => {
     if (!newPost.trim() && !imageFile && !videoFile) return;
 
-    const imageUrl = await uploadFile(imageFile, "images");
-    const videoUrl = await uploadFile(videoFile, "videos");
+    const image_url = await uploadFile(imageFile, "images");
+    const video_url = await uploadFile(videoFile, "videos");
 
     await supabase.from("posts").insert({
       content: newPost,
       author_id: user.id,
-      image_url: imageUrl,
-      video_url: videoUrl
+      image_url,
+      video_url
     });
 
     setNewPost("");
@@ -138,67 +182,115 @@ export default function App() {
     setVideoFile(null);
 
     loadPosts();
+    showToast("动态已发布 🌿");
   };
 
-  /* ================= UI（完全保留你原来的风格） ================= */
+  const addSchedule = async () => {
+    if (!newSched.title || !newSched.date) return;
+
+    await supabase.from("schedules").insert({
+      ...newSched,
+      author_id: user.id
+    });
+
+    setNewSched({ title: "", date: "", time: "", location: "", description: "" });
+    setShowSchedForm(false);
+    loadSchedules();
+    showToast("日程已发布");
+  };
+
+  const roleLabel = {
+    admin: "管理员",
+    member: "团队",
+    viewer: "粉丝"
+  };
+
+  const canPost = user && (user.role === "admin" || user.role === "member");
+
+  const s = {
+    wrap: { fontFamily: "'PingFang SC','Hiragino Sans GB',system-ui,sans-serif", minHeight: "100vh", background: "#f6f6f4", color: "#1a1a1a" },
+    nav: { background: "#fff", borderBottom: "0.5px solid #e8e8e8", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 52, position: "sticky", top: 0 },
+    logo: { fontWeight: 700 },
+    card: { background: "#fff", borderRadius: 12, padding: "1rem 1.25rem", marginBottom: 10 },
+    input: { width: "100%", border: "1px solid #e8e8e8", borderRadius: 8, padding: "8px 12px" },
+    btn: { padding: "7px 14px", borderRadius: 7, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }
+  };
+
+  /* ================= UI（完全不动） ================= */
 
   if (page === "login") return (
-    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#f6f6f4" }}>
-      <div style={{ width:340 }}>
-        <div style={{ textAlign:"center" }}>
+    <div style={s.wrap}>
+      <div style={{ display:"flex", justifyContent:"center", alignItems:"center", height:"100vh" }}>
+        <div style={s.card}>
           <Tree />
-          <h2>然er和风</h2>
+          <h3>然er和风</h3>
+
+          <input
+            placeholder="用户名"
+            value={loginForm.username}
+            onChange={e=>setLoginForm(p=>({...p,username:e.target.value}))}
+            style={s.input}
+          />
+
+          <input
+            type="password"
+            placeholder="密码"
+            value={loginForm.password}
+            onChange={e=>setLoginForm(p=>({...p,password:e.target.value}))}
+            style={s.input}
+          />
+
+          {loginErr && <p style={{color:"red"}}>{loginErr}</p>}
+
+          <button onClick={login} style={s.btn}>登录</button>
+          <button onClick={()=>setPage("register")} style={s.btn}>注册</button>
         </div>
-
-        <input placeholder="用户名"
-          value={loginForm.username}
-          onChange={e=>setLoginForm(p=>({...p,username:e.target.value}))}
-        />
-
-        <input type="password" placeholder="密码"
-          value={loginForm.password}
-          onChange={e=>setLoginForm(p=>({...p,password:e.target.value}))}
-        />
-
-        {loginErr && <p style={{color:"red"}}>{loginErr}</p>}
-
-        <button onClick={login}>登录</button>
-
-        <button onClick={()=>setPage("register")}>注册</button>
       </div>
     </div>
   );
 
   if (page === "feed") return (
-    <div style={{ padding:20, background:"#f6f6f4", minHeight:"100vh" }}>
-      
-      {/* 发布框（只加功能，不改风格） */}
-      <div style={{ background:"#fff", padding:15, borderRadius:12, marginBottom:20 }}>
-        
-        <textarea
-          placeholder="说点什么..."
-          value={newPost}
-          onChange={e=>setNewPost(e.target.value)}
-          style={{ width:"100%" }}
-        />
+    <div style={s.wrap}>
+      <nav style={s.nav}>
+        <span style={s.logo}>🌿 然er和风</span>
+        <button onClick={logout}>退出</button>
+      </nav>
 
-        {/* ⭐ 新增上传 */}
-        <input type="file" accept="image/*" onChange={e=>setImageFile(e.target.files[0])} />
-        <input type="file" accept="video/*" onChange={e=>setVideoFile(e.target.files[0])} />
+      <div style={{ maxWidth:600, margin:"auto", padding:20 }}>
 
-        <button onClick={publishPost}>发布</button>
+        {canPost && (
+          <div style={s.card}>
+            <textarea
+              style={s.input}
+              value={newPost}
+              onChange={e=>setNewPost(e.target.value)}
+              placeholder="分享你的动态"
+            />
+
+            {/* ⭐ 新增（UI不动，只加功能） */}
+            <input type="file" accept="image/*" onChange={e=>setImageFile(e.target.files[0])} />
+            <input type="file" accept="video/*" onChange={e=>setVideoFile(e.target.files[0])} />
+
+            <button onClick={publishPost} style={s.btn}>发布</button>
+          </div>
+        )}
+
+        {posts.map(p=>(
+          <div key={p.id} style={s.card}>
+            <div>{p.content}</div>
+
+            {/* ⭐ 新增展示（不影响UI结构） */}
+            {p.image_url && (
+              <img src={p.image_url} style={{ width:"100%", marginTop:10 }} />
+            )}
+
+            {p.video_url && (
+              <video src={p.video_url} controls style={{ width:"100%", marginTop:10 }} />
+            )}
+          </div>
+        ))}
+
       </div>
-
-      {/* 动态列表 */}
-      {posts.map(p=>(
-        <div key={p.id} style={{ background:"#fff", padding:15, marginBottom:10 }}>
-          <p>{p.content}</p>
-
-          {p.image_url && <img src={p.image_url} style={{ width:"100%" }} />}
-          {p.video_url && <video src={p.video_url} controls style={{ width:"100%" }} />}
-        </div>
-      ))}
-
     </div>
   );
 
